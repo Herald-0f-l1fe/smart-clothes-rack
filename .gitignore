@@ -1,0 +1,27 @@
+# ---- Arduino / PlatformIO ----
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+build/
+*.bin
+*.elf
+*.hex
+*.map
+
+# ---- CAD / 3D ----
+*.FCStd1
+*.FCStd.bak
+*.stl.bak
+*.gcode
+
+# ---- OS / editor ----
+Thumbs.db
+desktop.ini
+.DS_Store
+*~
+*.swp
+
+# ---- Локальные заметки и черновики ----
+notes/
+*.local.md
