@@ -66,9 +66,14 @@ unsigned long  modeStartedMs= 0;
 unsigned long  lastStepUs   = 0;
 unsigned long  stepCount    = 0;
 unsigned long  lastStatusMs = 0;
+bool           modeDone     = false;      // true = последнее движение завершилось (стоп)
 
 bool           autoMode     = true;       // PIR управляет мотором?
 bool           motionNow    = false;      // итоговое решение: есть движение?
+
+// --- Стартовый прогон: сначала к SLACK, потом к TIGHT, только затем авто ---
+bool           startRun      = true;      // true = идёт стартовый прогон
+int            startPhase    = 0;         // 0 = едем к SLACK, 1 = едем к TIGHT, 2 = готово
 
 // PIR: голосование за окно PIR_WINDOW_MS.
 // Интегратор: HIGH добавляет dt, LOW вычитает dt.
@@ -110,6 +115,7 @@ void printState() {
 void startMove(Dir d, const __FlashStringHelper* reason) {
   if (mode == d) return;                  // уже едем туда — ничего не меняем
   mode = d;
+  modeDone = false;
   modeStartedMs = millis();
   lastStepUs = micros();
   stepCount = 0;
@@ -124,6 +130,7 @@ void startMove(Dir d, const __FlashStringHelper* reason) {
 
 void stopMotor(const __FlashStringHelper* why) {
   if (mode == DIR_IDLE) return;
+  modeDone = true;
   mode = DIR_IDLE;
   motorEnable(false);
   Serial.print(F(" >> STOP ("));
@@ -131,6 +138,11 @@ void stopMotor(const __FlashStringHelper* why) {
   Serial.print(F("), шагов="));
   Serial.println(stepCount);
   printState();
+}
+
+// true = последнее движение завершилось остановкой (по концевику/таймауту)
+bool modeFinished() {
+  return modeDone;
 }
 
 // ================== PIR ==================
@@ -238,9 +250,41 @@ void updateMotion() {
   }
 }
 
+// ================== СТАРТОВЫЙ ПРОГОН ==================
+// При включении: сначала крутим к SLACK, затем к TIGHT, затем передаём
+// управление автомату (PIR). Остановка — по соответствующему концевику.
+void updateStartRun() {
+  if (!startRun) return;
+
+  // Нужное направление текущей фазы и его концевик
+  Dir want      = (startPhase == 0) ? DIR_TO_SLACK : DIR_TO_TIGHT;
+  int wantLimit = (startPhase == 0) ? LIMIT_SLACK   : LIMIT_TIGHT;
+
+  // Дошли до нужного концевика (нажат) — фаза завершена
+  if (digitalRead(wantLimit) == LOW) {
+    if (mode != DIR_IDLE) stopMotor(F("selftest: концевик"));  // на всякий случай
+    if (startPhase == 0) {
+      Serial.println(F(" >> старт: SLACK достигнут"));
+      startPhase = 1;
+      modeDone = false;               // начинаем новую фазу «чисто»
+    } else {
+      Serial.println(F(" >> старт: TIGHT достигнут"));
+      startPhase = 2;
+    }
+    return;
+  }
+
+  // Концевик не нажат: если никуда не едем — начинаем двигаться к цели фазы
+  if (mode == DIR_IDLE) {
+    startMove(want, (startPhase == 0) ? F("старт: к SLACK") : F("старт: к TIGHT"));
+  }
+  // Если уже едем — updateMotion() доведёт; таймаут/ошибку он же обработает.
+}
+
 // ================== АВТО по PIR ==================
 void updateAuto() {
   if (!autoMode) return;
+  if (startRun) return;             // пока идёт стартовый прогон — авто молчит
   if (motionNow) {
     startMove(DIR_TO_TIGHT, F("PIR: движение"));
   } else {
@@ -295,7 +339,8 @@ void loop() {
   unsigned long now = millis();
   handleSerial();
   pollPir(now);
-  updateAuto();     // авто-режим выбирает направление
+  updateStartRun(); // стартовый прогон SLACK->TIGHT (пока не завершён)
+  updateAuto();     // авто-режим выбирает направление (молчит во время прогона)
   updateMotion();   // физическое движение и остановка по лимиту
   updateLed(now);
 }
